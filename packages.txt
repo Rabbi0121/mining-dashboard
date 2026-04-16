@@ -1,9 +1,0 @@
-streamlit
-pandas
-numpy
-plotly
-scipy
-reportlab
-kaleido
-matplotlib
-chromium
