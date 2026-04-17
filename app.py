@@ -1,12 +1,8 @@
-import os
-import tempfile
-from io import BytesIO
-
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
@@ -14,50 +10,59 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 # ---------------- CONFIG ----------------
 DEFAULT_DATA_URL = "https://docs.google.com/spreadsheets/d/1OjJv6zwE-Be-nMu8DPeJb1j9dmjhMPJlMnN2hMfqdlU/gviz/tq?tqx=out:csv&sheet=Generated%20Data"
 
-st.set_page_config(page_title="Mining Data Dashboard", layout="wide")
+st.set_page_config(page_title="Mining Dashboard", layout="wide")
 
-# ---------------- DATA CLEAN ----------------
+# ---------------- CLEAN FUNCTION ----------------
 def normalize_data(df):
+    if "Date" not in df.columns:
+        raise ValueError("Missing Date column")
+
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
+    # Drop only invalid dates
     df = df.dropna(subset=["Date"])
 
+    # Convert numeric columns
     for col in df.columns:
         if col != "Date":
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df = df.dropna()
+    # Drop rows where ALL mine values are NaN
+    value_cols = [c for c in df.columns if c != "Date"]
+    df = df.dropna(subset=value_cols, how="all")
+
     df = df.sort_values("Date").reset_index(drop=True)
 
     return df
 
 # ---------------- LOAD ----------------
 st.sidebar.header("Data Source")
-source_mode = st.sidebar.radio("Source", ["Google Sheet", "Upload CSV"])
+mode = st.sidebar.radio("Source", ["Google Sheet", "Upload CSV"])
 
-if source_mode == "Google Sheet":
-    url = st.sidebar.text_input("CSV URL", DEFAULT_DATA_URL)
-    try:
+try:
+    if mode == "Google Sheet":
+        url = st.sidebar.text_input("CSV URL", DEFAULT_DATA_URL)
         df = pd.read_csv(url)
-        df = normalize_data(df)
-    except Exception as e:
-        st.error(f"❌ Failed to load data: {e}")
-        st.stop()
-else:
-    file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-    if file is None:
-        st.warning("Upload file first")
-        st.stop()
+    else:
+        file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+        if file is None:
+            st.warning("Upload file first")
+            st.stop()
+        df = pd.read_csv(file)
 
-    df = pd.read_csv(file)
     df = normalize_data(df)
 
+except Exception as e:
+    st.error(f"❌ Load failed: {e}")
+    st.stop()
+
 # ---------------- SAFETY ----------------
-if df is None or df.empty:
-    st.error("No valid data")
+if df.empty:
+    st.error("No valid data after cleaning")
     st.stop()
 
 # ---------------- MAIN ----------------
-mine_columns = [col for col in df.columns if col != "Date"]
+mine_columns = [c for c in df.columns if c != "Date"]
 df["Total"] = df[mine_columns].sum(axis=1)
 series_columns = mine_columns + ["Total"]
 
@@ -84,7 +89,7 @@ def detect(series):
     iqr = q3 - q1
     iqr_flag = (s < q1 - iqr_factor * iqr) | (s > q3 + iqr_factor * iqr)
 
-    # Moving average safe
+    # Moving Average
     ma = s.rolling(ma_window, min_periods=ma_window).mean()
     ma_flag = ((s - ma).abs() / ma).fillna(0) > 0.2
 
@@ -95,17 +100,19 @@ def trend(series):
     x = np.arange(len(series))
     y = series.values
 
-    deg = min(2, len(series) - 1)
-    if deg < 1:
+    if len(series) < 2:
         return y
 
+    deg = min(2, len(series) - 1)
     coeff = np.polyfit(x, y, deg)
+
     return np.poly1d(coeff)(x)
 
 # ---------------- UI ----------------
 st.title("Mining Dashboard")
 
 col1, col2, col3 = st.columns(3)
+
 col1.metric("Rows", len(df))
 
 start = df["Date"].min()
@@ -130,7 +137,7 @@ fig.add_scatter(
     y=df[selected][anomaly_flag],
     mode="markers",
     name="Anomalies",
-    marker=dict(color="red", size=8)
+    marker=dict(color="red", size=8),
 )
 
 st.plotly_chart(fig, use_container_width=True)
@@ -141,7 +148,7 @@ st.subheader("Anomalies")
 anomalies = df[anomaly_flag]
 
 if anomalies.empty:
-    st.info("No anomalies")
+    st.info("No anomalies detected")
 else:
     st.dataframe(anomalies)
 
